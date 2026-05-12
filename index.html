@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JIS 500m Mesh — 3D Building + Load Curve Viewer</title>
+<style>
+  :root {
+    --bg: #0f0f1a; --panel-bg: #1a1a2e; --text: #e0e0e0; --text-dim: #888;
+    --accent: #4fc3f7;
+    --mesh-0: #e57373; --mesh-1: #81c784; --mesh-2: #64b5f6; --mesh-3: #ffb74d;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden; background: var(--bg); color: var(--text);
+  }
+  #canvas-container { position: fixed; inset: 0; z-index: 1; }
+
+  #loading-screen {
+    position: fixed; inset: 0; z-index: 100;
+    background: var(--bg); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; transition: opacity 0.5s;
+  }
+  #loading-screen.hidden { opacity: 0; pointer-events: none; }
+  #loading-screen h2 { font-size: 18px; margin-bottom: 20px; color: var(--text); }
+  .progress-bar {
+    width: 300px; height: 4px; background: rgba(255,255,255,0.1);
+    border-radius: 2px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: var(--accent); width: 0%;
+    transition: width 0.3s ease;
+  }
+  #loading-status { margin-top: 12px; font-size: 12px; color: var(--text-dim); }
+
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; pointer-events: none;
+  }
+  #topbar > * { pointer-events: auto; }
+  #title-block {
+    background: var(--panel-bg); border-radius: 10px; padding: 10px 16px;
+    border: 1px solid rgba(255,255,255,0.08); opacity: 0.94;
+  }
+  #title-block h1 { font-size: 15px; font-weight: 600; white-space: nowrap; }
+  #title-block .sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  #mesh-tabs {
+    display: flex; gap: 4px; background: var(--panel-bg);
+    border-radius: 10px; padding: 4px; border: 1px solid rgba(255,255,255,0.08);
+    opacity: 0.94;
+  }
+  #mesh-tabs button {
+    background: transparent; border: none; color: #999;
+    padding: 8px 14px; border-radius: 7px; cursor: pointer;
+    font-size: 12px; font-weight: 500; transition: all 0.2s; white-space: nowrap;
+  }
+  #mesh-tabs button:hover { color: #ddd; background: rgba(255,255,255,0.06); }
+  #mesh-tabs button.active { color: #fff; background: rgba(255,255,255,0.12); }
+  #mesh-tabs button .count { font-size: 10px; color: #777; display: block; }
+  #mesh-tabs button.active .count { color: #aaa; }
+
+  #minimap-container {
+    position: fixed; top: 90px; right: 16px; z-index: 10;
+    width: 200px; height: 200px; background: var(--panel-bg);
+    border-radius: 10px; border: 1px solid rgba(255,255,255,0.1);
+    overflow: hidden; opacity: 0.92;
+  }
+  #minimap-container .map-label {
+    position: absolute; top: 4px; left: 8px; font-size: 9px;
+    color: #888; z-index: 2; pointer-events: none;
+  }
+  #minimap-container canvas { width: 100%; height: 100%; }
+
+  #legend {
+    position: fixed; bottom: 24px; left: 16px; z-index: 10;
+    background: var(--panel-bg); padding: 8px 14px; border-radius: 8px;
+    opacity: 0.9; border: 1px solid rgba(255,255,255,0.08);
+    font-size: 11px; color: #aaa;
+  }
+  #legend span { color: #ddd; }
+
+  #load-panel {
+    position: fixed; top: 16px; right: 16px; z-index: 20;
+    width: 380px; background: var(--panel-bg); border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.12); opacity: 0.95;
+    display: flex; flex-direction: column; max-height: calc(100vh - 32px);
+    transition: transform 0.3s ease, opacity 0.3s ease;
+  }
+  #load-panel.hidden { transform: translateX(420px); opacity: 0; pointer-events: none; }
+  #load-panel .ph {
+    padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #load-panel .ph h3 { font-size: 14px; font-weight: 600; }
+  #load-panel .close-btn {
+    background: none; border: none; color: #888; cursor: pointer;
+    font-size: 18px; padding: 2px 6px; border-radius: 4px;
+  }
+  #load-panel .close-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+  #load-panel .binfo {
+    padding: 8px 16px; font-size: 11px; color: var(--text-dim);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  #load-panel .binfo em { color: #ddd; font-style: normal; }
+  #load-panel .tabs {
+    display: flex; gap: 0; padding: 6px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  #load-panel .tabs button {
+    flex: 1; text-align: center; padding: 5px 0; font-size: 11px;
+    color: #888; cursor: pointer; border-radius: 5px;
+    background: transparent; border: none; transition: all 0.2s;
+  }
+  #load-panel .tabs button.active { color: #fff; background: rgba(255,255,255,0.1); }
+  #load-panel .tabs button:hover { color: #ccc; }
+  #load-panel .chart-wrap { padding: 10px 14px; flex: 1; min-height: 200px; }
+  #load-panel .chart-legend {
+    display: flex; gap: 12px; padding: 0 14px 10px; font-size: 10px; color: #888;
+  }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+
+  #tooltip {
+    position: fixed; z-index: 30; pointer-events: none;
+    background: rgba(0,0,0,0.85); color: #fff; padding: 5px 9px;
+    border-radius: 5px; font-size: 11px; display: none; white-space: nowrap;
+  }
+  #hints {
+    position: fixed; bottom: 24px; right: 24px; z-index: 10;
+    font-size: 10px; color: #555; text-align: right; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading-screen">
+  <h2>Loading Visualization...</h2>
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+  <div id="loading-status">Initializing...</div>
+</div>
+
+<div id="canvas-container"></div>
+
+<div id="topbar">
+  <div id="title-block">
+    <h1>500m Mesh — Building 3D + Load Curves</h1>
+    <div class="sub" id="stats-text">Loading...</div>
+  </div>
+  <div id="mesh-tabs">
+    <button data-mesh="533935483">M483<span class="count">129 bldg</span></button>
+    <button data-mesh="533935971">M971<span class="count">369 bldg</span></button>
+    <button data-mesh="533945142">M142<span class="count">586 bldg</span></button>
+    <button data-mesh="533945022">M022<span class="count">810 bldg</span></button>
+  </div>
+</div>
+
+<div id="minimap-container">
+  <span class="map-label">Tokyo</span>
+  <canvas id="minimap-canvas"></canvas>
+</div>
+
+<div id="legend">
+  Buildings: <span id="legend-count">-</span> &nbsp;|&nbsp;
+  Avg height: <span id="legend-height">-</span>m &nbsp;|&nbsp;
+  Total demand: <span id="legend-demand">-</span> kWh/day
+</div>
+
+<div id="hints">
+  Drag: rotate &nbsp;|&nbsp; Scroll: zoom &nbsp;|&nbsp; Click: select building<br>
+  R: reset view &nbsp;|&nbsp; F: fit &nbsp;|&nbsp; 1-4: switch mesh &nbsp;|&nbsp; Esc: deselect
+</div>
+
+<div id="load-panel" class="hidden">
+  <div class="ph">
+    <h3 id="panel-title">Building Load Profile</h3>
+    <button class="close-btn" id="close-panel">&times;</button>
+  </div>
+  <div class="binfo" id="building-info"></div>
+  <div class="tabs">
+    <button class="active" data-mode="daily">Daily (24h)</button>
+    <button data-mode="weekly">Weekly (7d)</button>
+    <button data-mode="monthly">Monthly (30d)</button>
+  </div>
+  <div class="chart-wrap"><canvas id="load-chart"></canvas></div>
+  <div class="chart-legend">
+    <span><span class="dot" style="background:#4fc3f7"></span> Mesh demand (kW)</span>
+    <span><span class="dot" style="background:rgba(255,255,255,0.2)"></span> Average</span>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script src="https://unpkg.com/three@0.145.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.145.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+(function() {
+'use strict';
+
+// ══ Constants ══
+var MESHES = ['533935483', '533935971', '533945142', '533945022'];
+var MESH_COLORS = {
+  '533935483': 0xe57373, '533935971': 0x81c784,
+  '533945142': 0x64b5f6, '533945022': 0xffb74d
+};
+var MESH_CENTERS = {
+  '533935483': { lat: 35.64167, lon: 139.70000 },
+  '533935971': { lat: 35.64167, lon: 139.68750 },
+  '533945142': { lat: 35.65833, lon: 139.71250 },
+  '533945022': { lat: 35.65000, lon: 139.68750 }
+};
+var REF_LAT = 35.667, REF_LON = 139.683;
+var METERS_PER_DEG_LAT = 111320;
+function metersPerDegLon(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
+
+// ══ State ══
+var currentMesh = MESHES[0];
+var allBuildings = [];
+var buildingMeshes = [];
+var selectedBuilding = null;
+var selectedObj = null;
+var currentMode = 'daily';
+var electricityData = null;
+var tokyoGeoJSON = null;
+
+// ══ Loading progress ══
+var loadingProgress = { buildings: 0, electricity: 0, tokyo: 0 };
+function updateProgress() {
+  var total = (loadingProgress.buildings + loadingProgress.electricity + loadingProgress.tokyo) / 3;
+  document.getElementById('progress-fill').style.width = (total * 100) + '%';
+}
+
+// ══ Data loading ══
+async function loadData() {
+  document.getElementById('loading-status').textContent = 'Loading building data...';
+  var buildingsResp = await fetch('buildings_compact.json');
+  var buildingsData = await buildingsResp.json();
+  loadingProgress.buildings = 1;
+  updateProgress();
+
+  document.getElementById('loading-status').textContent = 'Loading electricity data...';
+  var elecResp = await fetch('electricity_data.json');
+  electricityData = await elecResp.json();
+  loadingProgress.electricity = 1;
+  updateProgress();
+
+  document.getElementById('loading-status').textContent = 'Loading map data...';
+  var tokyoResp = await fetch('tokyo_outline.json');
+  tokyoGeoJSON = await tokyoResp.json();
+  loadingProgress.tokyo = 1;
+  updateProgress();
+
+  allBuildings = buildingsData.buildings;
+  document.getElementById('loading-status').textContent = 'Initializing scene...';
+  return true;
+}
+
+// ══ Three.js Setup ══
+var container = document.getElementById('canvas-container');
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a28);
+scene.fog = new THREE.Fog(0x1a1a28, 300, 3000);
+
+var camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 1, 8000);
+camera.position.set(400, 350, 400);
+
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+container.appendChild(renderer.domElement);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x404060, 2.0));
+var sun = new THREE.DirectionalLight(0xffeedd, 5);
+sun.position.set(400, 600, 200);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 3000;
+sun.shadow.camera.left = -500; sun.shadow.camera.right = 500;
+sun.shadow.camera.top = 500; sun.shadow.camera.bottom = -500;
+sun.shadow.bias = -0.0002;
+scene.add(sun);
+var fill = new THREE.DirectionalLight(0x8899cc, 1.0);
+fill.position.set(-200, 100, -100);
+scene.add(fill);
+
+// Ground
+var ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(4000, 4000),
+  new THREE.MeshStandardMaterial({ color: 0x2a2a3a, roughness: 0.9, metalness: 0.1 })
+);
+ground.rotation.x = -Math.PI / 2; ground.position.y = -0.5;
+ground.receiveShadow = true; ground.name = 'ground';
+scene.add(ground);
+
+// Grid
+var grid = new THREE.PolarGridHelper(800, 32, 16, 64, 0x3a3a4a, 0x2a2a3a);
+grid.position.y = -0.4;
+scene.add(grid);
+
+// Controls
+var controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.minDistance = 20; controls.maxDistance = 2000;
+controls.maxPolarAngle = Math.PI / 2 + 0.2;
+controls.target.set(0, 0, 0);
+controls.update();
+
+// ══ Coordinate helpers ══
+function latlonToLocal(lat, lon) {
+  var mpl = metersPerDegLon(REF_LAT);
+  return { x: (lon - REF_LON) * mpl, z: -(lat - REF_LAT) * METERS_PER_DEG_LAT };
+}
+
+// ══ Load curve from REAL electricity data ══
+function getMeshLoadData(meshCode, mode) {
+  if (!electricityData || !electricityData[meshCode]) return null;
+  var ed = electricityData[meshCode];
+  var rows = ed.data;
+  var slots = ed.time_slots;
+  var dates = ed.dates;
+
+  if (mode === 'daily') {
+    var profile = new Array(slots.length).fill(0);
+    for (var d = 0; d < rows.length; d++) {
+      for (var s = 0; s < slots.length; s++) profile[s] += rows[d][s];
+    }
+    return profile.map(function(v, i) {
+      var h = Math.floor(slots[i] / 2);
+      var m = slots[i] % 2 === 1 ? '00' : '30';
+      return { t: i, label: String(h).padStart(2,'0') + ':' + m, value: v / rows.length };
+    });
+  } else if (mode === 'weekly') {
+    var last7 = rows.slice(-7);
+    var dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    return last7.map(function(day, i) {
+      var total = day.reduce(function(a,b){ return a+b; }, 0);
+      return { t: i, label: dayNames[i], value: total };
+    });
+  } else {
+    return rows.map(function(day, i) {
+      var total = day.reduce(function(a,b){ return a+b; }, 0);
+      var lbl = dates[i] ? dates[i].slice(5) : ('D' + (i+1));
+      return { t: i, label: lbl, value: total };
+    });
+  }
+}
+
+function estimateBuildingLoad(meshCode, building, mode) {
+  var meshData = getMeshLoadData(meshCode, mode);
+  if (!meshData) return null;
+  var meshBuildings = allBuildings.filter(function(b) { return b.mesh_code === meshCode; });
+  var totalFootprint = meshBuildings.reduce(function(s, b) { return s + (b.footprintArea || 10); }, 0);
+  var buildingShare = (building.footprintArea || 10) / (totalFootprint || 1);
+  return meshData.map(function(d) { return { t: d.t, label: d.label, value: d.value * buildingShare }; });
+}
+
+// ══ Chart rendering ══
+function drawChart(canvas, data) {
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.parentElement.getBoundingClientRect();
+  var W = rect.width * dpr, H = rect.height * dpr;
+  canvas.width = W; canvas.height = H;
+  canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
+  ctx.scale(dpr, dpr);
+
+  var pad = { top: 12, right: 16, bottom: 26, left: 46 };
+  var pw = rect.width - pad.left - pad.right;
+  var ph = rect.height - pad.top - pad.bottom;
+  var vals = data.map(function(d) { return d.value; });
+  var yMax = Math.max.apply(null, vals) * 1.12;
+  var avg = vals.reduce(function(a,b){ return a+b; }, 0) / vals.length;
+
+  function xS(i) { return pad.left + (i / Math.max(data.length - 1, 1)) * pw; }
+  function yS(v) { return pad.top + ph - (v / yMax) * ph; }
+
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+  for (var i = 0; i <= 4; i++) {
+    var y = pad.top + (ph * i) / 4;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + pw, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px Inter, sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((yMax * (1 - i / 4)).toFixed(0), pad.left - 6, y + 3);
+  }
+
+  // X labels
+  ctx.fillStyle = '#666'; ctx.textAlign = 'center'; ctx.font = '9px Inter, sans-serif';
+  var xStep = data.length > 20 ? Math.floor(data.length / 8) : 1;
+  for (var i = 0; i < data.length; i += Math.max(1, xStep)) {
+    ctx.fillText(data[i].label, xS(i), pad.top + ph + 14);
+  }
+
+  // Average line
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1;
+  ctx.setLineDash([3, 5]); ctx.beginPath();
+  ctx.moveTo(pad.left, yS(avg)); ctx.lineTo(pad.left + pw, yS(avg)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Area fill
+  var grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ph);
+  grad.addColorStop(0, 'rgba(79,195,247,0.3)'); grad.addColorStop(1, 'rgba(79,195,247,0.02)');
+  ctx.fillStyle = grad; ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top + ph);
+  for (var i = 0; i < data.length; i++) ctx.lineTo(xS(i), yS(vals[i]));
+  ctx.lineTo(xS(data.length - 1), pad.top + ph); ctx.closePath(); ctx.fill();
+
+  // Line
+  ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 1.8; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (var i = 0; i < data.length; i++) {
+    var x = xS(i), y = yS(vals[i]);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+// ══ Building mesh creation ══
+function createBuildingMesh(building, colorHex) {
+  var coords = building.coordinates;
+  if (coords.length < 3) return null;
+
+  var pts = coords.map(function(c) {
+    var p = latlonToLocal(c[1], c[0]);
+    return new THREE.Vector2(p.x, p.z);
+  });
+
+  // Ensure CCW winding
+  var area = 0;
+  for (var i = 0; i < pts.length; i++) {
+    var j = (i + 1) % pts.length;
+    area += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  if (area < 0) pts.reverse();
+
+  building.footprintArea = Math.abs(area) / 2;
+
+  var shape = new THREE.Shape(pts);
+  var h = Math.max(building.height || 3, 2.5);
+  var geom = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: h, bevelEnabled: false });
+  geom.rotateX(-Math.PI / 2);
+
+  var mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.6, metalness: 0.15 });
+  var mesh = new THREE.Mesh(geom, mat);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  mesh.userData = { building: building, meshCode: building.mesh_code, isBuilding: true };
+  return mesh;
+}
+
+// ══ Scene management ══
+function clearBuildings() {
+  for (var i = 0; i < buildingMeshes.length; i++) {
+    var m = buildingMeshes[i];
+    m.geometry.dispose();
+    m.material.dispose();
+    scene.remove(m);
+  }
+  buildingMeshes = [];
+}
+
+function loadMesh(meshCode) {
+  clearBuildings();
+  deselectBuilding();
+
+  var meshBuildings = allBuildings.filter(function(b) { return b.mesh_code === meshCode; });
+  var color = MESH_COLORS[meshCode] || 0xaaaaaa;
+  var created = 0;
+
+  for (var i = 0; i < meshBuildings.length; i++) {
+    try {
+      var m = createBuildingMesh(meshBuildings[i], color);
+      if (m) { scene.add(m); buildingMeshes.push(m); created++; }
+    } catch(e) {
+      console.warn('Failed to create building ' + i + ':', e.message);
+    }
+  }
+
+  // Update legend
+  document.getElementById('legend-count').textContent = created;
+  var avgH = meshBuildings.length > 0
+    ? (meshBuildings.reduce(function(s,b){ return s + (b.height||0); }, 0) / meshBuildings.length).toFixed(1)
+    : '-';
+  document.getElementById('legend-height').textContent = avgH;
+
+  if (electricityData && electricityData[meshCode]) {
+    document.getElementById('legend-demand').textContent =
+      Math.round(electricityData[meshCode].avg_daily_kwh).toLocaleString();
+  } else {
+    document.getElementById('legend-demand').textContent = '-';
+  }
+
+  // Camera to mesh center
+  var center = MESH_CENTERS[meshCode];
+  var p = latlonToLocal(center.lat, center.lon);
+  controls.target.set(p.x, 0, p.z);
+  camera.position.set(p.x + 200, 200, p.z + 200);
+  controls.update();
+
+  drawMinimap(meshCode);
+  document.getElementById('stats-text').textContent =
+    created + ' buildings · Mesh ' + meshCode + ' · Tokyo';
+}
+
+// ══ Mini-map ══
+function drawMinimap(activeMesh) {
+  var canvas = document.getElementById('minimap-canvas');
+  var dpr = window.devicePixelRatio || 1;
+  var W = 200 * dpr, H = 200 * dpr;
+  canvas.width = W; canvas.height = H;
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  var pad = 10, pw = 180, ph = 180;
+  var MAP_LAT_MIN = 35.50, MAP_LAT_MAX = 35.82;
+  var MAP_LON_MIN = 139.00, MAP_LON_MAX = 140.00;
+
+  function proj(lat, lon) {
+    var x = pad + ((lon - MAP_LON_MIN) / (MAP_LON_MAX - MAP_LON_MIN)) * pw;
+    var y = pad + ph - ((lat - MAP_LAT_MIN) / (MAP_LAT_MAX - MAP_LAT_MIN)) * ph;
+    return { x: x, y: y };
+  }
+
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, 200, 200);
+
+  // Draw Tokyo boundary
+  if (tokyoGeoJSON) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 0.8;
+
+    function drawPolygon(coords) {
+      ctx.beginPath();
+      for (var r = 0; r < coords.length; r++) {
+        var ring = coords[r];
+        for (var i = 0; i < ring.length; i++) {
+          var pt = proj(ring[i][1], ring[i][0]);
+          i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y);
+        }
+      }
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    }
+
+    var geom = tokyoGeoJSON.geometry;
+    if (geom.type === 'Polygon') {
+      drawPolygon(geom.coordinates);
+    } else if (geom.type === 'MultiPolygon') {
+      for (var p = 0; p < geom.coordinates.length; p++) {
+        drawPolygon(geom.coordinates[p]);
+      }
+    }
+  }
+
+  // Draw mesh points
+  for (var i = 0; i < MESHES.length; i++) {
+    var mc = MESHES[i];
+    var c = MESH_CENTERS[mc];
+    var pt = proj(c.lat, c.lon);
+    var isActive = mc === activeMesh;
+    var hexColor = '#' + MESH_COLORS[mc].toString(16).padStart(6, '0');
+
+    if (isActive) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = hexColor; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      ctx.fillStyle = hexColor;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 0.5;
+  for (var i = 1; i < 5; i++) {
+    var gy = pad + (ph * i) / 5;
+    ctx.beginPath(); ctx.moveTo(pad, gy); ctx.lineTo(pad + pw, gy); ctx.stroke();
+    var gx = pad + (pw * i) / 5;
+    ctx.beginPath(); ctx.moveTo(gx, pad); ctx.lineTo(gx, pad + ph); ctx.stroke();
+  }
+}
+
+// ══ Selection & panel ══
+function selectBuilding(obj) {
+  if (selectedObj) {
+    selectedObj.material.emissive.setHex(0x000000);
+    selectedObj.material.emissiveIntensity = 0;
+  }
+  selectedObj = obj;
+  selectedBuilding = obj.userData.building;
+  obj.material.emissive.setHex(0xffffff);
+  obj.material.emissiveIntensity = 0.45;
+  updateLoadPanel();
+}
+
+function deselectBuilding() {
+  if (selectedObj) {
+    selectedObj.material.emissive.setHex(0x000000);
+    selectedObj.material.emissiveIntensity = 0;
+    selectedObj = null;
+  }
+  selectedBuilding = null;
+  document.getElementById('load-panel').classList.add('hidden');
+}
+
+function updateLoadPanel() {
+  if (!selectedBuilding) return;
+  var panel = document.getElementById('load-panel');
+  panel.classList.remove('hidden');
+  var b = selectedBuilding;
+  document.getElementById('panel-title').textContent = 'Building · Mesh ' + b.mesh_code;
+  document.getElementById('building-info').innerHTML =
+    'Height: <em>' + b.height.toFixed(1) + ' m</em> &nbsp;|&nbsp; ' +
+    'Footprint: <em>' + (b.footprintArea || 0).toFixed(1) + ' m²</em> &nbsp;|&nbsp; ' +
+    'Lat: <em>' + b.cy.toFixed(5) + '</em> &nbsp; Lon: <em>' + b.cx.toFixed(5) + '</em>';
+  var data = estimateBuildingLoad(b.mesh_code, b, currentMode);
+  if (data) drawChart(document.getElementById('load-chart'), data);
+}
+
+// ══ Event handlers ══
+var raycaster = new THREE.Raycaster();
+var mouse = new THREE.Vector2();
+
+function onMouseMove(e) {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  var hits = raycaster.intersectObjects(buildingMeshes);
+  var tt = document.getElementById('tooltip');
+  if (hits.length > 0 && hits[0].object.userData.isBuilding) {
+    var b = hits[0].object.userData.building;
+    tt.style.display = 'block';
+    tt.style.left = (e.clientX + 16) + 'px';
+    tt.style.top = (e.clientY - 8) + 'px';
+    tt.textContent = 'h: ' + b.height.toFixed(1) + 'm · Mesh ' + b.mesh_code;
+    document.body.style.cursor = 'pointer';
+  } else {
+    tt.style.display = 'none';
+    document.body.style.cursor = '';
+  }
+}
+
+function onClick(e) {
+  if (e.target.closest('#load-panel') || e.target.closest('#topbar') ||
+      e.target.closest('#minimap-container') || e.target.closest('#legend') ||
+      e.target.tagName === 'BUTTON') return;
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  var hits = raycaster.intersectObjects(buildingMeshes);
+  if (hits.length > 0 && hits[0].object.userData.isBuilding) {
+    selectBuilding(hits[0].object);
+  } else {
+    deselectBuilding();
+  }
+}
+
+// ══ Initialization ══
+async function init() {
+  try {
+    await loadData();
+
+    // Setup event listeners
+    var tabs = document.querySelectorAll('#mesh-tabs button');
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener('click', function(e) {
+        e.stopPropagation();
+        var mc = this.dataset.mesh;
+        if (mc === currentMesh) return;
+        currentMesh = mc;
+        var allTabs = document.querySelectorAll('#mesh-tabs button');
+        for (var j = 0; j < allTabs.length; j++) allTabs[j].classList.remove('active');
+        this.classList.add('active');
+        loadMesh(mc);
+      });
+    }
+
+    var timeTabs = document.querySelectorAll('#load-panel .tabs button');
+    for (var i = 0; i < timeTabs.length; i++) {
+      timeTabs[i].addEventListener('click', function(e) {
+        e.stopPropagation();
+        var allTimeTabs = document.querySelectorAll('#load-panel .tabs button');
+        for (var j = 0; j < allTimeTabs.length; j++) allTimeTabs[j].classList.remove('active');
+        this.classList.add('active');
+        currentMode = this.dataset.mode;
+        if (selectedBuilding) updateLoadPanel();
+      });
+    }
+
+    document.getElementById('close-panel').addEventListener('click', deselectBuilding);
+
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    window.addEventListener('click', onClick);
+
+    // Load first mesh
+    tabs[0].classList.add('active');
+    loadMesh(MESHES[0]);
+
+    // Hide loading screen
+    setTimeout(function() {
+      document.getElementById('loading-screen').classList.add('hidden');
+    }, 300);
+
+    console.log('Loaded ' + allBuildings.length + ' buildings across ' + MESHES.length + ' meshes');
+  } catch(err) {
+    document.getElementById('loading-status').textContent = 'Error: ' + err.message;
+    console.error('Init failed:', err);
+  }
+}
+
+// Keyboard
+window.addEventListener('keydown', function(e) {
+  var key = e.key.toLowerCase();
+  if (key === 'escape') { deselectBuilding(); return; }
+  if (key === 'r') {
+    var c = MESH_CENTERS[currentMesh];
+    var p = latlonToLocal(c.lat, c.lon);
+    controls.target.set(p.x, 0, p.z);
+    camera.position.set(p.x + 200, 200, p.z + 200);
+    controls.update();
+    return;
+  }
+  if (key === 'f') {
+    if (buildingMeshes.length === 0) return;
+    var box = new THREE.Box3();
+    for (var i = 0; i < buildingMeshes.length; i++) box.expandByObject(buildingMeshes[i]);
+    var bc = box.getCenter(new THREE.Vector3());
+    var bs = box.getSize(new THREE.Vector3());
+    var d = Math.max(bs.x, bs.y, bs.z);
+    controls.target.copy(bc);
+    camera.position.set(bc.x + d * 0.8, bc.y + d * 0.7, bc.z + d * 0.8);
+    controls.update();
+    return;
+  }
+  var idx = parseInt(key) - 1;
+  if (idx >= 0 && idx < MESHES.length) {
+    currentMesh = MESHES[idx];
+    var tabs = document.querySelectorAll('#mesh-tabs button');
+    for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+    var btn = document.querySelector('#mesh-tabs button[data-mesh="' + currentMesh + '"]');
+    if (btn) btn.classList.add('active');
+    loadMesh(currentMesh);
+  }
+});
+
+window.addEventListener('resize', function() {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  drawMinimap(currentMesh);
+  if (selectedBuilding) updateLoadPanel();
+});
+
+// ══ Render loop ══
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// Start
+document.addEventListener('DOMContentLoaded', init);
+animate();
+
+})();
+</script>
+</body>
+</html>
